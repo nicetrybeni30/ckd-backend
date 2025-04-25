@@ -1,0 +1,7 @@
+Django>=5.0
+djangorestframework
+djangorestframework-simplejwt
+pandas
+scikit-learn
+joblib
+django-cors-headers
