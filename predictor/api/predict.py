@@ -82,7 +82,16 @@ def predict_ckd(request):
         ]
 
         df = pd.DataFrame([features], columns=feature_names)
-        print("📋 Features:", df)
+        print("📋 Features before filtering:", df)
+
+        # Important: Only select model-expected features
+        selected_features = [
+            'age', 'bp', 'sg', 'al', 'su',
+            'bgr', 'bu', 'sc', 'hemo', 'pcv',
+            'htn', 'dm'
+        ]
+        df = df[selected_features]
+        print("📋 Features for model prediction:", df)
 
         if model:
             raw_prediction = model.predict(df)[0]
@@ -111,7 +120,8 @@ def predict_ckd(request):
         if record.htn.lower() == "yes":
             risk_flags.append("⚠️ Has hypertension")
 
-        if prediction == "notckd" and len(risk_flags) >= 3:
+        # Override model if necessary based on risk flags
+        if (prediction == "notckd" or prediction == "unknown") and len(risk_flags) >= 3:
             print("⚠️ Overriding model prediction due to multiple red flags")
             prediction = "ckd"
             recommendation = generate_recommendation(prediction, stage)
