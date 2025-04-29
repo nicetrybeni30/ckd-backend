@@ -238,3 +238,16 @@ def get_ckd_distribution(request):
 
     formatted = [{"classification": k, "total": v} for k, v in result.items() if v > 0]
     return Response(formatted)
+
+# 🆕 ✅ API: Get Patient Record by USER_ID (NEW)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_record_by_user(request, user_id):
+    if request.user.role != "admin":
+        return Response({"error": "Not allowed"}, status=403)
+    try:
+        record = PatientRecord.objects.get(user__id=user_id)
+        serializer = PatientRecordSerializer(record)
+        return Response(serializer.data)
+    except PatientRecord.DoesNotExist:
+        return Response({'error': 'Record not found.'}, status=404)

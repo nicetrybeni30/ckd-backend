@@ -13,7 +13,8 @@ from predictor.views import (
     UpdateAccountView,
     get_retrain_history,
     get_ckd_distribution,
-    users_with_records  # ✅ newly added
+    users_with_records,
+    get_record_by_user   
 )
 
 urlpatterns = [
@@ -22,6 +23,7 @@ urlpatterns = [
     path('records/me/', RecordMeView.as_view()),
     path('records/', RecordCreateUpdateView.as_view()),
     path('records/<int:user_id>/', RecordDetailByAdminView.as_view()),
+    path('records/by_user/<int:user_id>/', get_record_by_user), 
     path('predict/', predict_ckd),
     path('retrain/', retrain_model),
     path('patient/me/', get_logged_in_user_info),
@@ -30,5 +32,5 @@ urlpatterns = [
     path('account/update/', UpdateAccountView.as_view()),
     path('retrain-history/', get_retrain_history),
     path('ckd-distribution/', get_ckd_distribution),
-    path('users-with-records/', users_with_records),  # ✅ here
+    path('users-with-records/', users_with_records),
 ]
