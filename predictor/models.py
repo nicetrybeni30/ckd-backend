@@ -51,3 +51,10 @@ class PatientRecord(models.Model):
     last_recommendation = models.TextField(null=True, blank=True)
     last_confidence = models.FloatField(null=True, blank=True)
     last_predicted_at = models.DateTimeField(null=True, blank=True)
+
+class ModelRetrainLog(models.Model):
+    accuracy = models.FloatField()
+    retrained_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"Retrained at {self.retrained_at} with {self.accuracy * 100:.2f}%"

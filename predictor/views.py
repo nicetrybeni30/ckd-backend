@@ -4,9 +4,11 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
 from django.contrib.auth import get_user_model
-from predictor.models import PatientRecord
+from predictor.models import PatientRecord, ModelRetrainLog
 from predictor.serializers import PatientRecordSerializer, UserSerializer
 from django.contrib.auth.hashers import make_password
+from rest_framework import status
+from django.db.models import Count
 
 User = get_user_model()
 
@@ -20,18 +22,62 @@ class UserListView(APIView):
         users = User.objects.all()
         return Response(UserSerializer(users, many=True).data)
 
-# 🧠 Admin: Get user detail
-@api_view(['GET'])
+# 🧠 Admin: Get user detail / update user detail
+@api_view(['GET', 'PUT'])
 @permission_classes([IsAuthenticated])
 def get_user_details(request, user_id):
     if request.user.role != "admin":
         return Response({"error": "Not allowed"}, status=403)
+
     try:
         user = User.objects.get(id=user_id)
-        serializer = UserSerializer(user)
-        return Response(serializer.data)
+
+        if request.method == 'GET':
+            serializer = UserSerializer(user)
+            return Response(serializer.data)
+
+        if request.method == 'PUT':
+            data = request.data
+            user.username = data.get('username', user.username)
+            user.email = data.get('email', user.email)
+            user.phone_number = data.get('phone_number', user.phone_number)
+
+            if data.get('new_password'):
+                user.password = make_password(data['new_password'])
+
+            user.save()
+            return Response({"message": "User updated successfully."})
+
     except User.DoesNotExist:
         return Response({'error': 'User not found'}, status=404)
+
+# 🧠 Admin: Get all patients with record (new)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def users_with_records(request):
+    if request.user.role != "admin":
+        return Response({"error": "Not allowed"}, status=403)
+
+    patients = User.objects.filter(role='patient').prefetch_related('patientrecord')
+
+    results = []
+    for patient in patients:
+        record = None
+        try:
+            record_obj = patient.patientrecord
+            record = PatientRecordSerializer(record_obj).data
+        except PatientRecord.DoesNotExist:
+            record = None
+
+        results.append({
+            "id": patient.id,
+            "username": patient.username,
+            "email": patient.email,
+            "phone_number": patient.phone_number,
+            "record": record
+        })
+
+    return Response(results)
 
 # 🧠 Patient: Get their own user info
 @api_view(['GET'])
@@ -101,23 +147,19 @@ class RecordDetailByAdminView(APIView):
 @permission_classes([IsAuthenticated])
 def get_model_info(request):
     try:
-        with open(settings.BASE_DIR / 'ml_model' / 'model_accuracy.txt', 'r') as f:
-            accuracy = float(f.read().strip())
-    except:
+        latest_log = ModelRetrainLog.objects.latest('retrained_at')
+        accuracy = round(latest_log.accuracy * 100, 2)
+        retrained_at = latest_log.retrained_at.strftime('%Y-%m-%d %H:%M:%S')
+    except ModelRetrainLog.DoesNotExist:
         accuracy = None
-
-    try:
-        with open(settings.BASE_DIR / 'ml_model' / 'retrained_at.txt', 'r') as f:
-            retrained_at = f.read().strip()
-    except:
         retrained_at = "Unknown"
 
     return Response({
-        "model_accuracy": round(accuracy * 100, 2) if accuracy else "N/A",
+        "model_accuracy": accuracy if accuracy is not None else "N/A",
         "retrained_at": retrained_at
     })
 
-# 🧠 Patient Signup (NEW!)
+# 🧠 Patient Signup (Public)
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def patient_register(request):
@@ -140,3 +182,59 @@ def patient_register(request):
         role='patient'
     )
     return Response({"message": "Patient account created successfully!"})
+
+# 🧠 Patient: Update Account Info
+class UpdateAccountView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def put(self, request):
+        try:
+            user = request.user
+            data = request.data
+
+            user.username = data.get('username', user.username)
+            user.email = data.get('email', user.email)
+
+            if data.get('password'):
+                user.password = make_password(data.get('password'))
+
+            user.save()
+
+            return Response({"message": "Account updated successfully!"})
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+# 🆕 ✅ API: Get Retrain History (for LineChart)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_retrain_history(request):
+    logs = ModelRetrainLog.objects.order_by('retrained_at')
+    data = [
+        {"date": log.retrained_at.strftime('%Y-%m-%d'), "accuracy": round(log.accuracy * 100, 2)}
+        for log in logs
+    ]
+    return Response(data)
+
+# 🆕 ✅ API: Get CKD Stage Distribution (for BarChart)
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_ckd_distribution(request):
+    if request.user.role != 'admin':
+        return Response({"error": "Not allowed"}, status=403)
+
+    distribution = PatientRecord.objects.values('classification').annotate(total=Count('id'))
+
+    result = {
+        "Chronic Kidney Disease (Registered)": 0,
+        "No Chronic Kidney Disease (Registered)": 0
+    }
+
+    for item in distribution:
+        raw = item['classification'].strip().lower()
+        if raw == 'ckd':
+            result['Chronic Kidney Disease (Registered)'] += item['total']
+        elif raw == 'notckd':
+            result['No Chronic Kidney Disease (Registered)'] += item['total']
+
+    formatted = [{"classification": k, "total": v} for k, v in result.items() if v > 0]
+    return Response(formatted)

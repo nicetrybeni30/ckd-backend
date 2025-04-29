@@ -9,12 +9,16 @@ from predictor.views import (
     get_logged_in_user_info,
     get_model_info,
     RecordDetailByAdminView,
-    patient_register   # ✅ Include the new signup endpoint
+    patient_register,
+    UpdateAccountView,
+    get_retrain_history,
+    get_ckd_distribution,
+    users_with_records  # ✅ newly added
 )
 
 urlpatterns = [
     path('users/', UserListView.as_view()),
-    path('users/<int:user_id>/', get_user_details),
+    path('users/<int:user_id>/', get_user_details, name='user-detail'),
     path('records/me/', RecordMeView.as_view()),
     path('records/', RecordCreateUpdateView.as_view()),
     path('records/<int:user_id>/', RecordDetailByAdminView.as_view()),
@@ -22,7 +26,9 @@ urlpatterns = [
     path('retrain/', retrain_model),
     path('patient/me/', get_logged_in_user_info),
     path('model-info/', get_model_info),
-
-    # 🛡️ Public Registration Endpoint
     path('register/', patient_register),
+    path('account/update/', UpdateAccountView.as_view()),
+    path('retrain-history/', get_retrain_history),
+    path('ckd-distribution/', get_ckd_distribution),
+    path('users-with-records/', users_with_records),  # ✅ here
 ]
