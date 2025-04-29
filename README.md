@@ -19,7 +19,7 @@ This project is composed of:
 
 ```bash
 Step 1: Clone the Repository
-git clone <your-repo-link>
+git clone git@github.com:nicetrybeni30/ckd-backend.git
 cd ckd-backend
 
 Step 2: Create and Activate Virtual Environment
