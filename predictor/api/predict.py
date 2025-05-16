@@ -1,7 +1,4 @@
-# File: predictor/api/predict.py
-
 import os
-import joblib
 import traceback
 import pandas as pd
 from datetime import datetime
@@ -10,19 +7,25 @@ from rest_framework.response import Response
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from predictor.models import PatientRecord
+from tensorflow.keras.models import load_model
+import numpy as np
+import joblib
 
 # Absolute paths to model + metadata
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_PATH = os.path.join(BASE_DIR, 'ml_model', 'rf_ckd_model.pkl')
+MODEL_PATH = os.path.join(BASE_DIR, 'ml_model', 'deep_learning_ckd_model.keras')
+SCALER_PATH = os.path.join(BASE_DIR, 'ml_model', 'scaler.pkl')
 ACCURACY_PATH = os.path.join(BASE_DIR, 'ml_model', 'model_accuracy.txt')
 RETRAINED_AT_PATH = os.path.join(BASE_DIR, 'ml_model', 'retrained_at.txt')
 
-# Load model
+# Load model + scaler
 try:
-    model = joblib.load(MODEL_PATH)
-    print("✅ Model loaded from:", MODEL_PATH)
+    model = load_model(MODEL_PATH)
+    scaler = joblib.load(SCALER_PATH)
+    print("✅ Keras model loaded from:", MODEL_PATH)
 except Exception as e:
     model = None
+    scaler = None
     print(f"⚠️ Model loading failed: {e}")
 
 # Helper: determine CKD stage based on creatinine
@@ -65,39 +68,28 @@ def predict_ckd(request):
     try:
         record = PatientRecord.objects.get(user=user)
 
-        # Collect all 24 features in correct order
+        # Collect and transform input features
         features = [
             record.age, record.bp, record.sg, record.al, record.su,
-            encode(record.rbc), encode(record.pc), encode(record.pcc), encode(record.ba),
-            record.bgr, record.bu, record.sc, record.sod, record.pot,
-            record.hemo, record.pcv, record.wc, record.rc,
-            encode(record.htn), encode(record.dm), encode(record.cad),
-            encode(record.appet), encode(record.pe), encode(record.ane),
+            record.bgr, record.bu, record.sc, record.hemo, record.pcv,
+            encode(record.htn), encode(record.dm)
         ]
-
-        feature_names = [
-            'age', 'bp', 'sg', 'al', 'su', 'rbc', 'pc', 'pcc', 'ba', 'bgr',
-            'bu', 'sc', 'sod', 'pot', 'hemo', 'pcv', 'wc', 'rc',
-            'htn', 'dm', 'cad', 'appet', 'pe', 'ane'
-        ]
-
-        df = pd.DataFrame([features], columns=feature_names)
-        print("📋 Features before filtering:", df)
-
-        # Important: Only select model-expected features
-        selected_features = [
+        df = pd.DataFrame([features], columns=[
             'age', 'bp', 'sg', 'al', 'su',
             'bgr', 'bu', 'sc', 'hemo', 'pcv',
             'htn', 'dm'
-        ]
-        df = df[selected_features]
-        print("📋 Features for model prediction:", df)
+        ])
+        print("📋 Features for model prediction:\n", df)
 
-        if model:
-            raw_prediction = model.predict(df)[0]
-            confidence = max(model.predict_proba(df)[0])
-            label_map = {1: "ckd", 0: "notckd"}
-            prediction = label_map.get(raw_prediction, "unknown")
+        if model and scaler:
+            scaled = scaler.transform(df)
+            prediction_raw = model.predict(scaled)[0][0]
+            prediction = "ckd" if prediction_raw >= 0.5 else "notckd"
+            confidence = float(prediction_raw) if prediction == "ckd" else 1 - float(prediction_raw)
+
+            print("🔮 Raw model prediction value:", prediction_raw)
+            print("🧑‍🧠 Model says:", prediction)
+            print("🎯 Confidence score:", round(confidence * 100, 2), "%")
         else:
             prediction = "unknown"
             confidence = 0.0
@@ -120,20 +112,24 @@ def predict_ckd(request):
         if record.htn.lower() == "yes":
             risk_flags.append("⚠️ Has hypertension")
 
-        # Override model if necessary based on risk flags
+        overridden = False
+        model_opinion = prediction
+
         if (prediction == "notckd" or prediction == "unknown") and len(risk_flags) >= 3:
             print("⚠️ Overriding model prediction due to multiple red flags")
+            overridden = True
             prediction = "ckd"
             recommendation = generate_recommendation(prediction, stage)
 
-        # Save prediction results into PatientRecord
+        # Save prediction results
+        confidence_pct = float(round(confidence * 100, 2))
         record.last_prediction = prediction
         record.last_recommendation = recommendation
-        record.last_confidence = round(confidence * 100, 2)
+        record.last_confidence = confidence_pct
         record.last_predicted_at = timezone.now()
         record.save()
 
-        # Load accuracy + retrain time
+        # Load accuracy and retrain time
         try:
             with open(ACCURACY_PATH, 'r') as f:
                 model_accuracy = float(f.read().strip())
@@ -150,10 +146,12 @@ def predict_ckd(request):
             "prediction": prediction,
             "ckd_stage": stage,
             "recommendation": recommendation,
-            "confidence": round(confidence * 100, 2),
+            "confidence": confidence_pct,
             "model_accuracy": round(model_accuracy * 100, 2) if model_accuracy else "Unknown",
             "retrained_at": retrained_at,
-            "risk_flags": risk_flags
+            "risk_flags": risk_flags,
+            "model_opinion": model_opinion,
+            "overridden": overridden
         })
 
     except PatientRecord.DoesNotExist:

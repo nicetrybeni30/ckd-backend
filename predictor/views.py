@@ -10,7 +10,36 @@ from django.contrib.auth.hashers import make_password
 from rest_framework import status
 from django.db.models import Count
 
+import time, json, joblib
+import numpy as np
+import pandas as pd
+from pathlib import Path
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
+from tensorflow.keras.optimizers import Adam
+
+PROGRESS_FILE = settings.BASE_DIR / 'predictor' / 'ml_model' / 'progress.json'
+
 User = get_user_model()
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def retrain_progress(request):
+    if request.user.role != 'admin':
+        return Response({"error": "Not allowed"}, status=403)
+
+    try:
+        if not PROGRESS_FILE.exists():
+            return Response({"epoch": 0, "percent": 0, "seconds_left": 0})
+
+        with open(PROGRESS_FILE, 'r') as f:
+            data = json.load(f)
+
+        return Response(data)
+    except Exception as e:
+        return Response({"error": str(e)}, status=500)
 
 # 🧠 Admin: List all users
 class UserListView(APIView):
