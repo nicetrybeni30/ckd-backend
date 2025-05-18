@@ -1,60 +1,112 @@
 from django.core.management.base import BaseCommand
-import os
-import joblib
-from datetime import datetime
+from django.conf import settings
+from predictor.models import PatientRecord, ModelRetrainLog
+
 import pandas as pd
-from sklearn.model_selection import StratifiedShuffleSplit
-from sklearn.preprocessing import LabelEncoder
-from xgboost import XGBClassifier
+import numpy as np
+import time, json, joblib
+from pathlib import Path
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout, Input
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import LambdaCallback
+
+PROGRESS_FILE = settings.BASE_DIR / 'predictor' / 'ml_model' / 'progress.json'
 
 class Command(BaseCommand):
-    help = 'Retrain the CKD prediction model using XGBoost and save accuracy + timestamp.'
+    help = 'Manually retrain the CKD deep learning model and show progress.'
 
-    def handle(self, *args, **options):
-        # Path setup
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        csv_path = os.path.join(base_dir, 'Cleaned_CKD_Dataset.csv')
-        model_path = os.path.join(base_dir, 'ml_model', 'xgb_ckd_model.pkl')
-        accuracy_path = os.path.join(base_dir, 'ml_model', 'model_accuracy.txt')
-        retrained_at_path = os.path.join(base_dir, 'ml_model', 'retrained_at.txt')
+    def handle(self, *args, **kwargs):
+        model_dir = settings.BASE_DIR / 'predictor' / 'ml_model'
+        model_dir.mkdir(parents=True, exist_ok=True)
 
-        # Load dataset
-        df = pd.read_csv(csv_path)
-        df['classification'] = df['classification'].str.strip()
+        if PROGRESS_FILE.exists():
+            PROGRESS_FILE.unlink()
 
-        # Selected features
-        features = [
-            'age', 'bp', 'sg', 'al', 'su', 'rbc', 'pc', 'pcc', 'ba', 'bgr', 'bu', 'sc',
-            'sod', 'pot', 'hemo', 'pcv', 'wc', 'rc', 'htn', 'dm', 'cad', 'appet', 'pe', 'ane'
-        ]
-        required_cols = features + ['classification']
-        df = df.dropna(subset=required_cols)
+        records = PatientRecord.objects.all()
+        if not records.exists():
+            self.stdout.write(self.style.ERROR("❌ No records to train on."))
+            return
 
-        for col in ['rbc', 'pc', 'pcc', 'ba', 'htn', 'dm', 'cad', 'appet', 'pe', 'ane']:
-            df[col] = LabelEncoder().fit_transform(df[col])
+        data = pd.DataFrame(list(records.values()))
+        self.stdout.write(f"📊 Total records in DB: {len(data)}")
 
-        label_encoder = LabelEncoder()
-        y = label_encoder.fit_transform(df['classification'])
+        selected = data[[ 
+            'age', 'bp', 'sg', 'al', 'su',
+            'bgr', 'bu', 'sc', 'hemo', 'pcv',
+            'htn', 'dm', 'classification'
+        ]].dropna()
+        self.stdout.write(f"✅ Records used for training (after dropna): {len(selected)}")
 
-        X = df[features]
+        selected['htn'] = selected['htn'].apply(lambda x: 1 if x == 'yes' else 0)
+        selected['dm'] = selected['dm'].apply(lambda x: 1 if x == 'yes' else 0)
+        selected['classification'] = selected['classification'].apply(lambda x: 1 if x == 'ckd' else 0)
 
-        splitter = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
-        for train_idx, test_idx in splitter.split(X, y):
-            X_train, X_test = X.iloc[train_idx], X.iloc[test_idx]
-            y_train, y_test = y[train_idx], y[test_idx]
+        X = selected.drop('classification', axis=1)
+        y = selected['classification']
 
-        model = XGBClassifier(use_label_encoder=False, eval_metric='logloss')
-        model.fit(X_train, y_train)
+        scaler = StandardScaler()
+        X_scaled = scaler.fit_transform(X)
+        X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
 
-        model.label_encoder = label_encoder
-        joblib.dump(model, model_path)
-        self.stdout.write(self.style.SUCCESS("✅ XGBoost model retrained and saved."))
+        self.stdout.write(f"🧪 Training samples: {len(X_train)}")
+        self.stdout.write(f"🧪 Test samples: {len(X_test)}")
 
-        accuracy = model.score(X_test, y_test)
-        with open(accuracy_path, 'w') as f:
-            f.write(str(round(accuracy, 4)))
+        model = Sequential([
+            Input(shape=(X_train.shape[1],)),
+            Dense(64, activation='relu'),
+            Dropout(0.3),
+            Dense(32, activation='relu'),
+            Dropout(0.3),
+            Dense(1, activation='sigmoid')
+        ])
+        model.compile(optimizer=Adam(0.001), loss='binary_crossentropy', metrics=['accuracy'])
 
-        with open(retrained_at_path, 'w') as f:
-            f.write(datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        total_epochs = 100
+        start_time = time.time()
 
-        self.stdout.write(f"📊 Accuracy: {accuracy:.4f}")
+        def update_progress(epoch, logs):
+            percent = round(((epoch + 1) / total_epochs) * 100, 1)
+            elapsed = time.time() - start_time
+            estimated_total = elapsed / ((epoch + 1) / total_epochs)
+            seconds_left = int(estimated_total - elapsed)
+            with open(PROGRESS_FILE, 'w') as f:
+                json.dump({
+                    "epoch": epoch + 1,
+                    "percent": percent,
+                    "seconds_left": seconds_left
+                }, f)
+            self.stdout.write(f"🌀 Epoch {epoch+1:03}/{total_epochs} ➜ acc: {logs['accuracy']:.4f}, loss: {logs['loss']:.4f}")
+
+        callback = LambdaCallback(on_epoch_end=update_progress)
+
+        history = model.fit(
+            X_train, y_train,
+            validation_data=(X_test, y_test),
+            epochs=total_epochs,
+            batch_size=16,
+            callbacks=[callback],
+            verbose=0
+        )
+
+        loss, accuracy = model.evaluate(X_test, y_test, verbose=0)
+        model.save(model_dir / 'deep_learning_ckd_model.keras')
+        joblib.dump(scaler, model_dir / 'scaler.pkl')
+
+        log = ModelRetrainLog.objects.create(accuracy=accuracy)
+        with open(model_dir / 'model_accuracy.txt', 'w') as f:
+            f.write(str(accuracy))
+        with open(model_dir / 'retrained_at.txt', 'w') as f:
+            f.write(log.retrained_at.strftime('%Y-%m-%d %H:%M:%S'))
+
+        with open(PROGRESS_FILE, 'w') as f:
+            json.dump({
+                "epoch": 100,
+                "percent": 100.0,
+                "seconds_left": 0
+            }, f)
+
+        self.stdout.write(self.style.SUCCESS(f"✅ Test Accuracy: {accuracy:.2%}"))
+        self.stdout.write(self.style.SUCCESS(f"🕒 Finished at: {log.retrained_at.strftime('%Y-%m-%d %H:%M:%S')}"))
