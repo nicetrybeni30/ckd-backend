@@ -9,7 +9,7 @@ from predictor.serializers import PatientRecordSerializer, UserSerializer
 from django.contrib.auth.hashers import make_password
 from rest_framework import status
 from django.db.models import Count
-
+from django.utils.timezone import localtime
 import time, json, joblib
 import numpy as np
 import pandas as pd
@@ -125,6 +125,19 @@ class RecordMeView(APIView):
             return Response(PatientRecordSerializer(record).data)
         except PatientRecord.DoesNotExist:
             return Response({"error": "No patient record found."}, status=404)
+        
+    def put(self, request):
+        try:
+            record = PatientRecord.objects.get(user=request.user)
+            serializer = PatientRecordSerializer(record, data=request.data)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data)
+            print("❌ Serializer errors:", serializer.errors)  # Add this for debugging
+            return Response(serializer.errors, status=400)
+        except PatientRecord.DoesNotExist:
+            return Response({"error": "No patient record found."}, status=404)
+
 
 # 🧠 Patient: Create or Update their own record
 class RecordCreateUpdateView(APIView):
@@ -145,6 +158,16 @@ class RecordCreateUpdateView(APIView):
         except Exception as e:
             return Response({"error": str(e)}, status=500)
 
+    def put(self, request):
+        try:
+            record = PatientRecord.objects.get(user=request.user)
+            serializer = PatientRecordSerializer(record, data=request.data, partial=True)
+            if serializer.is_valid():
+                serializer.save()
+                return Response(serializer.data)
+            return Response(serializer.errors, status=400)
+        except PatientRecord.DoesNotExist:
+            return Response({"error": "Record not found."}, status=404)
 # 🧠 Admin: Get or Edit any patient's record
 class RecordDetailByAdminView(APIView):
     permission_classes = [IsAuthenticated]
@@ -178,7 +201,7 @@ def get_model_info(request):
     try:
         latest_log = ModelRetrainLog.objects.latest('retrained_at')
         accuracy = round(latest_log.accuracy * 100, 2)
-        retrained_at = latest_log.retrained_at.strftime('%Y-%m-%d %H:%M:%S')
+        retrained_at = localtime(latest_log.retrained_at).strftime('%Y-%m-%d %H:%M:%S')
     except ModelRetrainLog.DoesNotExist:
         accuracy = None
         retrained_at = "Unknown"

@@ -7,3 +7,6 @@ venv/
 
 # Ignore env files
 .env
+
+# Windows metadata
+*.Zone.Identifier

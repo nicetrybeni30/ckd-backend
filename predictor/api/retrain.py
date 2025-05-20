@@ -40,13 +40,17 @@ def retrain_model(request):
 
     selected = data[[ 
         'age', 'bp', 'sg', 'al', 'su',
-        'bgr', 'bu', 'sc', 'hemo', 'pcv',
-        'htn', 'dm', 'classification'
+        'rbc', 'pc', 'pcc', 'ba',
+        'bgr', 'bu', 'sc', 'sod', 'pot',
+        'hemo', 'pcv', 'wc', 'rc',
+        'htn', 'dm', 'cad', 'appet', 'pe', 'ane',
+        'classification'
     ]].dropna()
-    print(f"✅ Records used for training (after dropna): {len(selected)}")
+    # Encode categorical features
+    for col in ['rbc', 'pc', 'pcc', 'ba', 'htn', 'dm', 'cad', 'appet', 'pe', 'ane']:
+        selected[col] = selected[col].apply(lambda x: 1 if str(x).lower() in ['yes', 'present', 'abnormal', 'poor'] else 0)
 
-    selected['htn'] = selected['htn'].apply(lambda x: 1 if x == 'yes' else 0)
-    selected['dm'] = selected['dm'].apply(lambda x: 1 if x == 'yes' else 0)
+    print(f"✅ Records used for training (after dropna): {len(selected)}")
 
     X = selected.drop('classification', axis=1)
     y = selected['classification'].apply(lambda x: 1 if x == 'ckd' else 0)
