@@ -10,3 +10,6 @@ venv/
 
 # Windows metadata
 *.Zone.Identifier
+
+*.py:Zone.Identifier
+*.pyc:Zone.Identifier
