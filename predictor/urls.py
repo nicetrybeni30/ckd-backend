@@ -23,7 +23,7 @@ urlpatterns = [
     path('users/', UserListView.as_view()),
     path('users/<int:user_id>/', get_user_details, name='user-detail'),
     path('records/me/', RecordMeView.as_view()),
-    path('records/me/', RecordCreateUpdateView.as_view()),
+    path('records/create/', RecordCreateUpdateView.as_view()),
     path('records/<int:user_id>/', RecordDetailByAdminView.as_view()),
     path('records/by_user/<int:user_id>/', get_record_by_user), 
     path('predict/', predict_ckd),
